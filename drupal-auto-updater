@@ -1,0 +1,98 @@
+#!/bin/bash -eu
+## Description: Helps with updates to a Drupal site.
+## Usage: drupal-auto-updater jira-issue-num-for-release
+## Example: drupal-auto-updater 1285
+if [[ $# -eq 0 ]] ; then
+    echo "Usage: $0 issue-num"
+    echo "We require an issue number for the commit"
+    exit 1
+fi
+
+function initial-changes-check() {
+  # Export and commit initial config discrepancies if there are any.
+  drush cex -y
+
+  set +e
+  # Look for changes in the config folder
+  git status -s | grep "config/"
+  exit_status=$?
+  set -e
+  if [[ exit_status -eq 0 ]]; then
+    echo "--- Exporting initial config ---"
+    git add config/
+    git commit -m "DRUP-$ISSUENUM: Initial Commit for config before drupal-auto-updater starts running."
+  fi
+}
+
+function drupal-auto-updater() {
+  # Loop through each package and attempt to automate updating it
+  for package in $(jq -r ".installed[].name" "$1")
+  do
+    # Skip security advisories
+    if [[ "$package" == "drupal-composer/drupal-security-advisories" ]]; then
+      continue
+    fi
+    echo "Updating $package";
+    # Turn off exit on error to allow composer upgrade to fail.
+    # We are handling the error gracefully.
+    set +e
+    composer upgrade -w "$package"
+    exit_status=$?
+    set -e
+    if [ $exit_status != 0 ] ; then
+      git checkout -- composer.lock
+      composer install
+      echo "There was an error, restoring composer.lock to previous step"
+      exit 1
+    fi
+    set -e
+    drush updb -y
+    drush cr
+    drush cex -y --diff
+    git status
+
+    set +e
+    git diff --exit-code composer.lock
+    exit_status=$?
+    set -e
+    if [[ exit_status -eq 1 ]]
+    then
+      echo "We are committing for $package"
+      # We should always have a change to composer.lock ?
+      # ...so we should always be able to commit.
+      git add config composer.json composer.lock
+      git commit -m "DRUP-$ISSUENUM: Updated $package via drupal-auto-updater."
+    fi
+
+    echo "Done updating $package"
+    echo "----------------------"
+    echo ""
+  done
+}
+
+ISSUENUM="$1"
+shift
+
+# Export initial changes that may be in database
+initial-changes-check
+
+# Start with security upgrades
+# echo "Starting with drupal-security-advisories"
+# composer upgrade drupal-composer/drupal-security-advisories
+
+# Patches
+echo "--- Starting Update of Patches ---"
+composer outdated --direct --patch-only --format=json > /tmp/patches.json
+drupal-auto-updater /tmp/patches.json
+# Minors
+echo "--- Starting Update of Minors ---"
+composer outdated --direct --minor-only --format=json > /tmp/minors.json
+drupal-auto-updater /tmp/minors.json
+
+# Majors
+echo "--- Listing available majors  ---"
+composer outdated --direct --major-only --format=json > /tmp/majors.json
+cat /tmp/majors.json
+
+echo "--------------------------------------"
+echo "drupal-auto-updater completed successfully"
