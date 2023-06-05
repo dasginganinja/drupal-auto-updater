@@ -1,0 +1,12 @@
+{
+    "name": "lehigh-drupal/drupal-auto-updater",
+    "description": "Provides a script for automatically updating Drupal and configuration from updates.\"",
+    "type": "script",
+    "authors": [
+        {
+            "name": "Thomas M. Donahue",
+            "email": "tmd216@lehigh.edu"
+        }
+    ],
+    "require": {}
+}
